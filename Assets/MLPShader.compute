@@ -1,0 +1,78 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWTexture2D<float4> Result;
+
+float activation(float sum, float steepness)
+{
+    return 1.0f / (1.0f + exp(-2.0f * steepness * sum));
+}
+
+
+//buffer to receive the weights
+StructuredBuffer<float> Weights;
+//buffer to receive the inputs
+StructuredBuffer<float> Inputs;
+
+//buffer to store the outputs
+RWBuffer<float> Outputs;
+
+struct Layer {
+    int size; //number of neurons in the layer
+    int nConnections; //number of connections to the next layer
+};
+
+StructuredBuffer<Layer> layers;
+
+//NEURONS is the max number of neurons in a given layer
+
+groupshared float neurons[NEURONS]; // array to store the output of each neuron
+
+int getPos(int layer, Layer[] layers){
+    int pastConnections;
+    [unroll]
+    for (int l =0; l < layer; l++){ //iterating over the layers
+        pastConnections += layers[l].nConnections;
+    }
+    return pastConnections;
+}
+
+inline float getVal(uint pos, uint lSize) //adding all the inputs from the previous layer for a given neuron
+{
+    float val = 0.0f;
+    for (uint n = 0; n < lSize; ++n, ++pos) //weight matrix is arranged in [connections to the first neuron from the last layer, connections to the second neuron from the last layer, ...]
+    {
+        val += weight[pos] * neurons[n];
+    }
+    val += weight[pos];
+    return val;
+}
+
+[numthreads(NEURONS,1,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+
+    if (id < layers[0].size) { // if thread is in the value range for the layer
+        neurons[id.x] = Inputs[id.x]; //loading the input value into the neuron
+    }
+
+    float val = 0;
+    uint pos;
+    [unroll]// LAYERS is the number of hidden layers in the network 
+    for (int l = 1; l <= LAYERS; l++) { // for each neuron in the next layer
+        int lsize = layers[l].size;
+
+        GroupMemoryBarrierWithGroupSync();
+        pos = getPos(l);
+        val = getVal(pos,previousLsize);
+        GroupMemoryBarrierWithGroupSync();
+
+        neurons[id.x] = activation(val, 1.0f); // store the output of the neuron on the neuron array
+    }
+
+    if(id.x < layers[layers.Length - 1]){ // if thread is in the value range for the output layer
+        Outputs[id.x] = neurons[id.x]; // store the output of the neuron on the output array
+    }
+}
