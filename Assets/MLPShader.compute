@@ -10,7 +10,6 @@ float activation(float sum, float steepness)
     return 1.0f / (1.0f + exp(-2.0f * steepness * sum));
 }
 
-
 //buffer to receive the weights
 StructuredBuffer<float> Weights;
 //buffer to receive the inputs
@@ -24,14 +23,15 @@ struct Layer {
     int nConnections; //number of connections to the next layer
 };
 
-StructuredBuffer<Layer> layers;
+StructuredBuffer<Layer> Layers;
 
 //NEURONS is the max number of neurons in a given layer
 
-groupshared float neurons[NEURONS]; // array to store the output of each neuron
 
-int getPos(int layer, Layer[] layers){
-    int pastConnections;
+groupshared float neurons[3]; // array to store the output of each neuron
+
+int getPos(int layer, StructuredBuffer<Layer> layers){
+    int pastConnections = 0;
     [unroll]
     for (int l =0; l < layer; l++){ //iterating over the layers
         pastConnections += layers[l].nConnections;
@@ -39,40 +39,41 @@ int getPos(int layer, Layer[] layers){
     return pastConnections;
 }
 
-inline float getVal(uint pos, uint lSize) //adding all the inputs from the previous layer for a given neuron
+inline float getVal(uint pos, uint lSize, StructuredBuffer<float> Weights ) //adding all the inputs from the previous layer for a given neuron
 {
     float val = 0.0f;
     for (uint n = 0; n < lSize; ++n, ++pos) //weight matrix is arranged in [connections to the first neuron from the last layer, connections to the second neuron from the last layer, ...]
     {
-        val += weight[pos] * neurons[n];
+        val += Weights[pos] * neurons[n];
     }
-    val += weight[pos];
+    // val += weight[pos]; //neuron bias
     return val;
 }
 
-[numthreads(NEURONS,1,1)]
+[numthreads(3,1,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
 
-    if (id < layers[0].size) { // if thread is in the value range for the layer
+    if (id.x < Layers[0].size) { // if thread is in the value range for the layer
         neurons[id.x] = Inputs[id.x]; //loading the input value into the neuron
     }
 
     float val = 0;
     uint pos;
     [unroll]// LAYERS is the number of hidden layers in the network 
-    for (int l = 1; l <= LAYERS; l++) { // for each neuron in the next layer
-        int lsize = layers[l].size;
+    for (int l = 1; l <= 3; l++) { // for each neuron in the next layer this loop must run for all layers, so if the net has 3 layers (without the output) it must run from 1 to 3 
+        int lsize = Layers[l].size;
 
         GroupMemoryBarrierWithGroupSync();
-        pos = getPos(l);
-        val = getVal(pos,previousLsize);
+        int previousLsize = Layers[l-1].size;
+        pos = getPos(l,Layers);
+        val = getVal(pos,previousLsize,Weights);
         GroupMemoryBarrierWithGroupSync();
 
         neurons[id.x] = activation(val, 1.0f); // store the output of the neuron on the neuron array
     }
 
-    if(id.x < layers[layers.Length - 1]){ // if thread is in the value range for the output layer
+    if(id.x < 3){ // if thread is in the value range for the output layer ASSUMING THE OUTPUT LAYER HAS 3 NEURONS
         Outputs[id.x] = neurons[id.x]; // store the output of the neuron on the output array
     }
 }
